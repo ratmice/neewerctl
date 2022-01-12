@@ -1,105 +1,17 @@
-use btleplug::api::{Central, CentralEvent, Manager as _, ScanFilter, ValueNotification};
+use btleplug::api::{Central, Manager as _, ScanFilter};
 use btleplug::platform as btle_plat;
 use crossfire::mpmc;
-use std::{error, fmt, io, panic, pin, task};
+use std::panic;
 use tokio::{select, sync::oneshot};
-use tokio_stream::{Stream, StreamExt, StreamMap};
+use tokio_stream::{StreamExt, StreamMap};
 
 type AppStateT = ();
 type SinkT = ();
 
-#[derive(Debug)]
-pub enum AppError {
-    BtleError(btleplug::Error),
-    Crossfire(mpmc::SendError<AppStateT>),
-    GuiRecv(mpmc::TryRecvError),
-    Shutdown(ShutdownError),
-
-    IoError(std::io::Error),
-
-    // This should probably be cfg'd out.
-    // Use this to throw a random error and test out error paths in the code.
-    Sapper,
-}
-#[derive(Debug)]
-pub enum ShutdownError {
-    MsgRecv(oneshot::error::RecvError),
-    MsgSend(mpmc::SendError<Dev2Gui>),
-    Other,
-}
-
-impl<'a> fmt::Display for ShutdownError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        macro_rules! dump {
-            ($e: ident) => {
-                write!(f, "{:#?}", $e)
-            };
-        }
-        match self {
-            ShutdownError::MsgRecv(e) => dump!(e),
-            ShutdownError::MsgSend(e) => dump!(e),
-            ShutdownError::Other => write!(f, "Encountered other error."),
-        }
-    }
-}
-
-impl<'a> error::Error for ShutdownError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            ShutdownError::MsgRecv(e) => e.source(),
-            ShutdownError::MsgSend(e) => e.source(),
-            ShutdownError::Other => None,
-        }
-    }
-}
-
-impl From<io::Error> for AppError {
-    fn from(e: io::Error) -> Self {
-        AppError::IoError(e)
-    }
-}
-
-impl From<btleplug::Error> for AppError {
-    fn from(e: btleplug::Error) -> Self {
-        AppError::BtleError(e)
-    }
-}
-impl<'a> fmt::Display for AppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        macro_rules! dump {
-            ($e: ident) => {
-                write!(f, "{:#?}", $e)
-            };
-        }
-        use AppError as AE;
-        match self {
-            AE::BtleError(e) => dump!(e),
-            AE::Crossfire(e) => dump!(e),
-            AE::GuiRecv(e) => dump!(e),
-            AE::Shutdown(e) => dump!(e),
-            AE::IoError(e) => dump!(e),
-
-            AE::Sapper => write!(
-                f,
-                "This error should only occurr during internal testing..."
-            ),
-        }
-    }
-}
-
-impl<'a> error::Error for AppError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        use AppError as AE;
-        match self {
-            AE::BtleError(e) => e.source(),
-            AE::Crossfire(e) => e.source(),
-            AE::GuiRecv(e) => e.source(),
-            AE::IoError(e) => e.source(),
-            AE::Shutdown(e) => e.source(),
-            AE::Sapper => None,
-        }
-    }
-}
+mod errors;
+use errors::*;
+mod streams;
+use streams::*;
 
 fn idle_loop(
     rx: mpmc::RxBlocking<Dev2Gui, mpmc::SharedSenderFRecvB>,
@@ -134,11 +46,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let sink = ();
 
+    //
     // If we hit this limit we are drop events from the btle thread,
     // so pick something high enough that if we hit it,
     // things have gone awry and the gui probably isn't reading anymore.
     //
     // Or perhaps the btle thread has gone awry and is sending excessively.
+    //
+    // One might ask why not use an unbounded stream?
+    // Well, I haven't found an unbounded mpmc channel that works with
+    // the idle thread, I.e. sync, clone
+    // Maybe crossfires should, But it didn't when I tried it last
+    // (FIXME retry and remember why it didnt).
     let (tx_dev, rx_gui) = mpmc::bounded_tx_future_rx_blocking(1024);
     // The gui -> Dev bounds don't matter much we just retry next idle loop.
     let (tx_gui, rx_dev) = mpmc::bounded_tx_blocking_rx_future(255);
@@ -218,79 +137,28 @@ fn bluetooth_loop(
                     }
                     println!("{:?}", event)
                 }
-                _ = (&mut shutdown) => {
-                    let gui = stream_map.remove(&StreamKey::GuiState);
-                    let result = match gui {
-                        Some(EventStreams::GuiState(_stream)) => {
-                            match tx.send(Dev2Gui::Shutdown).await {
-                                Err(e) => {
-                                    Err(AppError::Shutdown(ShutdownError::MsgSend(e)))
+                msg = (&mut shutdown) => {
+                    return match msg {
+                        Ok(()) => {
+                            let gui = stream_map.remove(&StreamKey::GuiState);
+                            match gui {
+                                Some(EventStreams::GuiState(_stream)) => {
+                                    match tx.send(Dev2Gui::Shutdown).await {
+                                        Err(e) => {
+                                            Err(AppError::Shutdown(ShutdownError::MsgSend(e)))
+                                        }
+                                        Ok(()) => Ok(()),
+                                    }
                                 }
-                                Ok(()) => Ok(()),
+                                _ => { Err(AppError::Shutdown(ShutdownError::Other)) }
                             }
                         }
-                        _ => { Err(AppError::Shutdown(ShutdownError::Other)) }
-                    };
-                    break result;
+                        Err(e) => {
+                            Err(AppError::Shutdown(ShutdownError::MsgRecv(e)))
+                        }
+                    }
                 }
             }
         }
     })
-}
-
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-enum StreamKey {
-    BtleEvents,
-    GuiState,
-    BtleNotifications(btle_plat::PeripheralId),
-}
-
-#[derive(Debug)]
-enum EventVariants {
-    Event(CentralEvent),
-    Notif(ValueNotification),
-    GuiState(AppStateT),
-}
-
-enum EventStreams {
-    BtleEvents(pin::Pin<Box<dyn Stream<Item = CentralEvent> + Send>>),
-    BtleNotifications(pin::Pin<Box<dyn Stream<Item = ValueNotification> + Send>>),
-    GuiState(
-        crossfire::channel::Stream<AppStateT, mpmc::RxFuture<AppStateT, mpmc::SharedSenderBRecvF>>,
-    ),
-}
-
-impl Unpin for EventStreams {}
-
-impl Stream for EventStreams {
-    type Item = EventVariants;
-
-    fn poll_next(
-        mut self: pin::Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Option<Self::Item>> {
-        let mut this = self.as_mut();
-
-        match &mut *this {
-            Self::GuiState(stream) => pin::Pin::new(stream)
-                .poll_next(cx)
-                .map(|x| x.map(Self::Item::GuiState)),
-            Self::BtleEvents(stream) => stream
-                .as_mut()
-                .poll_next(cx)
-                .map(|x| x.map(Self::Item::Event)),
-            Self::BtleNotifications(stream) => stream
-                .as_mut()
-                .poll_next(cx)
-                .map(|x| x.map(Self::Item::Notif)),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::BtleEvents(stream) => stream.size_hint(),
-            Self::BtleNotifications(stream) => stream.size_hint(),
-            Self::GuiState(stream) => stream.size_hint(),
-        }
-    }
 }
