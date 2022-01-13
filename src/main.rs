@@ -9,8 +9,11 @@ type AppStateT = ();
 type SinkT = ();
 
 mod errors;
-use errors::*;
+mod appstate;
 mod streams;
+
+use errors::*;
+use appstate::*;
 use streams::*;
 
 fn idle_loop(
