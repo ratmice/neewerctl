@@ -7,16 +7,14 @@ use strum_macros::FromRepr;
 /// AppState...
 #[derive(Clone, Data, Debug, Lens)]
 pub struct AppState {
-    connected: im::OrdSet<Light>,
-    disconnected: im::OrdSet<Light>,
+    pub(crate) lights: im::OrdSet<Light>,
     scanning: bool,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         AppState {
-            connected: im::OrdSet::new(),
-            disconnected: im::OrdSet::new(),
+            lights: im::OrdSet::new(),
             scanning: false,
         }
     }
@@ -39,8 +37,9 @@ pub struct Light {
     peripheral: PeripheralId,
     mode: LightMode,
     power: bool,
+    pub(crate) connected: bool,
     #[data(ignore)]
-    _changes_: u8,
+    pub(crate) _changes_: u8,
 }
 
 #[derive(Data, Clone, Debug, Eq, PartialEq, FromRepr)]
@@ -48,6 +47,9 @@ pub struct Light {
 pub enum Changed {
     Mode = 1 << 0,
     Power = 1 << 1,
+    // This should perhaps split into GuiChanged and DeviceChanged.
+    // For now...
+    Connected = 1 << 2,
 }
 
 #[derive(Data, Clone, Debug, Eq, PartialEq)]
@@ -108,10 +110,10 @@ fn change_iter() {
     // A generic impl though seems blocked by other things though, like `inherent associated types`
     assert_eq!(
         ChangeIterator::new(std::u8::MAX).collect::<Vec<Changed>>(),
-        vec![Changed::Mode, Changed::Power]
+        vec![Changed::Mode, Changed::Power, Changed::Connected]
     );
     assert_eq!(
-        ChangeIterator::new(std::u8::MAX ^ 0x3).collect::<Vec<Changed>>(),
+        ChangeIterator::new(std::u8::MAX ^ 0x7).collect::<Vec<Changed>>(),
         vec![]
     );
 }
@@ -144,6 +146,7 @@ impl PartialOrd for Light {
 
 /// LightMode...
 #[derive(Clone, Data, Debug, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum LightMode {
     CCT(CCTMode),
     HSI(HSIMode),

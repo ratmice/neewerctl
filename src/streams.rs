@@ -1,6 +1,5 @@
 use crate::btle_plat;
 use crate::mpmc;
-use crate::AppStateT;
 use btleplug::api::{CentralEvent, ValueNotification};
 use std::{pin, task};
 use tokio_stream::Stream;
@@ -15,15 +14,18 @@ pub enum StreamKey {
 #[derive(Debug)]
 pub enum EventVariants {
     Event(CentralEvent),
-    Notif(ValueNotification),
-    GuiState(AppStateT),
+    Notification(ValueNotification),
+    GuiState(crate::Gui2Dev),
 }
 
 pub enum EventStreams {
     BtleEvents(pin::Pin<Box<dyn Stream<Item = CentralEvent> + Send>>),
     BtleNotifications(pin::Pin<Box<dyn Stream<Item = ValueNotification> + Send>>),
     GuiState(
-        crossfire::channel::Stream<AppStateT, mpmc::RxFuture<AppStateT, mpmc::SharedSenderBRecvF>>,
+        crossfire::channel::Stream<
+            crate::Gui2Dev,
+            mpmc::RxFuture<crate::Gui2Dev, mpmc::SharedSenderBRecvF>,
+        >,
     ),
 }
 
@@ -49,7 +51,7 @@ impl Stream for EventStreams {
             Self::BtleNotifications(stream) => stream
                 .as_mut()
                 .poll_next(cx)
-                .map(|x| x.map(Self::Item::Notif)),
+                .map(|x| x.map(Self::Item::Notification)),
         }
     }
 

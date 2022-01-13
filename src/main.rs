@@ -1,43 +1,77 @@
-use btleplug::api::{Central, Manager as _, ScanFilter};
+use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
 use btleplug::platform as btle_plat;
 use crossfire::mpmc;
+use druid::{
+    commands, AppLauncher, /* Data, */ Env, LocalizedString, Menu, MenuItem, SysMods,
+    WindowDesc, WindowId,
+};
 use std::panic;
 use tokio::{select, sync::oneshot};
 use tokio_stream::{StreamExt, StreamMap};
 
-type AppStateT = ();
-type SinkT = ();
+type AppStateT = appstate::AppState;
+type SinkT = druid::ExtEventSink;
 
+mod appstate;
 mod device;
 mod errors;
-mod appstate;
 mod streams;
+mod widgets;
 
+use appstate::*;
 use device::*;
 use errors::*;
-use appstate::*;
 use streams::*;
+use widgets::*;
 
 fn idle_loop(
     rx: mpmc::RxBlocking<Dev2Gui, mpmc::SharedSenderFRecvB>,
-    _: SinkT,
-    tx: mpmc::TxBlocking<AppStateT, mpmc::SharedSenderBRecvF>,
+    sink: SinkT,
+    tx: mpmc::TxBlocking<Gui2Dev, mpmc::SharedSenderBRecvF>,
 ) -> Result<(), AppError> {
     let mut finished = false;
     while !finished {
+        let tx = tx.clone();
         let rx_msg = rx.try_recv();
-        match rx_msg {
-            Ok(Dev2Gui::Shutdown) => finished = true,
-            Err(mpmc::TryRecvError::Empty) => {}
-            Err(e) => return Err(AppError::GuiRecv(e)),
-        };
-        if !finished {
-            let tx_msg = tx.send(());
-            match tx_msg {
-                // Likely sending too fast, we will try again the next time we receive our idle callback.
-                Err(mpmc::SendError(_)) => {}
-                Ok(()) => {}
+        let _local_state = AppState::default();
+
+        // This needs to be done outside of the idle callback.
+        //
+        // If the gui exits and a shutdown is then sent,
+        // The idle callback may never be called.
+        match &rx_msg {
+            Ok(Dev2Gui::Shutdown) => {
+                finished = true;
             }
+            Ok(Dev2Gui::Connected(_incoming)) => {}
+            Ok(Dev2Gui::Disconnected(_incoming)) => {}
+            Ok(Dev2Gui::Changed(_incoming)) => {}
+            Err(mpmc::TryRecvError::Empty) => {}
+            Err(e) => {
+                // It'd be better to propagate this to the gui somehow,
+                // probably fall-through... After that, we'll need to set finish.
+                //
+                // finished = true;
+                return Err(AppError::GuiRecv(*e));
+            }
+        };
+
+        if !finished {
+            sink.add_idle_callback(move |app_state: &mut AppStateT| {
+                // rayon?
+                let changed = app_state
+                    .lights
+                    .clone()
+                    .into_iter()
+                    .filter(|x| x._changes_ != 0 && x.connected)
+                    .collect::<im::OrdSet<Light>>();
+                let tx_msg = tx.send(Gui2Dev::Changed(changed));
+                match tx_msg {
+                    // Likely sending too fast, we will try again the next time we receive our idle callback.
+                    Err(mpmc::SendError(_)) => {}
+                    Ok(()) => {}
+                }
+            });
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
@@ -45,11 +79,26 @@ fn idle_loop(
     Ok(())
 }
 
+fn main_menu(_id: Option<WindowId>, _data: &AppState, _env: &Env) -> Menu<AppState> {
+    Menu::new(LocalizedString::new("gtk-menu-application-menu")).entry(
+        MenuItem::new(LocalizedString::new("gtk-menu-quit-app"))
+            // druid handles the QUIT_APP command automatically
+            .command(commands::QUIT_APP)
+            .hotkey(SysMods::Cmd, "q"),
+    )
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "needs-consoling")]
     console_subscriber::init();
+
+    let window = WindowDesc::new(devices_widget())
+        .title(LocalizedString::new("neewerctl-app").with_placeholder("neewerctl"))
+        .menu(main_menu);
+    let launcher = AppLauncher::with_window(window);
+
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let sink = ();
+    let sink = launcher.get_external_handle();
 
     //
     // If we hit this limit we are drop events from the btle thread,
@@ -75,7 +124,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         //result
     });
 
-    std::thread::sleep(std::time::Duration::from_secs(15));
+    launcher.launch(AppState::default()).expect("launch failed");
+
     println!("shutting down");
     if !shutdown_tx.is_closed() {
         shutdown_tx
@@ -99,14 +149,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub enum Dev2Gui {
+    Connected(im::OrdSet<Light>),
+    Disconnected(im::OrdSet<Light>),
+    Changed(im::OrdSet<Light>),
     Shutdown,
+}
+#[derive(Debug)]
+pub enum Gui2Dev {
+    Changed(im::OrdSet<Light>),
 }
 
 fn bluetooth_loop(
     mut shutdown: oneshot::Receiver<()>,
     tx: mpmc::TxFuture<Dev2Gui, mpmc::SharedSenderFRecvB>,
-    rx: mpmc::RxFuture<AppStateT, mpmc::SharedSenderBRecvF>,
+    rx: mpmc::RxFuture<Gui2Dev, mpmc::SharedSenderBRecvF>,
 ) -> Result<(), AppError> {
     use tokio::runtime::Builder;
     let rt = Builder::new_current_thread()
@@ -125,25 +183,42 @@ fn bluetooth_loop(
             StreamKey::GuiState,
             EventStreams::GuiState(rx.into_stream()),
         );
-        //events.insert(StreamKey::Notifications, StreamsFoo::Notif(btle_notif));
-        /*
-        while let Some(event) = stream_map.next().await {
-            println!("{:?}", event)
-        }
-        */
+        let mut peripherals: im::HashMap<btle_plat::PeripheralId, btle_plat::Peripheral> = im::HashMap::new();
+        let mut disconnected_ids: im::HashSet<btle_plat::PeripheralId> = im::HashSet::new();
         loop {
             select! {
                 event = stream_map.next() => {
                     match &event {
-                        Some((StreamKey::BtleEvents, _event)) => {},
-                        Some((StreamKey::BtleNotifications(_id), _value)) => {},
-                        Some((StreamKey::GuiState, _state)) => {},
+                        Some((StreamKey::BtleEvents, EventVariants::Event(event))) => {
+                            match event {
+                                btleplug::api::CentralEvent::DeviceDiscovered(_id) => {},
+                                btleplug::api::CentralEvent::DeviceUpdated(_id) => {},
+                                btleplug::api::CentralEvent::DeviceConnected(id) => {
+                                    let peripheral = adapter.peripheral(id).await.unwrap();
+                                    let notifs = peripheral.notifications().await.unwrap();
+                                    peripherals.insert(id.clone(), peripheral.clone());
+                                    stream_map.insert(StreamKey::BtleNotifications(id.clone()), EventStreams::BtleNotifications(notifs));
+                                },
+                                btleplug::api::CentralEvent::DeviceDisconnected(id) => {
+                                    disconnected_ids.insert(id.clone());
+                                    peripherals.remove(&id);
+                                    stream_map.remove(&StreamKey::BtleNotifications(id.clone()));
+                                },
+                                btleplug::api::CentralEvent::ManufacturerDataAdvertisement { .. } => {},
+                                btleplug::api::CentralEvent::ServiceDataAdvertisement { .. } => {},
+                                btleplug::api::CentralEvent::ServicesAdvertisement { .. } => {},
+                            }
+                        },
+                        Some((StreamKey::BtleNotifications(_id), EventVariants::Notification(_value))) => {},
+                        Some((StreamKey::GuiState, EventVariants::GuiState(_state))) => {},
+                        Some((_, _)) => unreachable!(),
                         None => todo!(),
                     }
                     println!("{:?}", event)
                 }
-                msg = (&mut shutdown) => {
-                    return match msg {
+                shutdown_msg = (&mut shutdown) => {
+                    println!("Shutting down: {:?}", shutdown_msg);
+                    return match shutdown_msg {
                         Ok(()) => {
                             let gui = stream_map.remove(&StreamKey::GuiState);
                             match gui {
@@ -152,7 +227,7 @@ fn bluetooth_loop(
                                         Err(e) => {
                                             Err(AppError::Shutdown(ShutdownError::MsgSend(e)))
                                         }
-                                        Ok(()) => Ok(()),
+                                        Ok(()) => { Ok(()) },
                                     }
                                 }
                                 _ => { Err(AppError::Shutdown(ShutdownError::Other)) }
