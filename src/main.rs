@@ -8,10 +8,12 @@ use tokio_stream::{StreamExt, StreamMap};
 type AppStateT = ();
 type SinkT = ();
 
+mod device;
 mod errors;
 mod appstate;
 mod streams;
 
+use device::*;
 use errors::*;
 use appstate::*;
 use streams::*;

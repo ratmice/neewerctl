@@ -152,19 +152,19 @@ pub enum LightMode {
 
 #[derive(Clone, Data, Debug, Lens, PartialEq)]
 pub struct CCTMode {
-    temp: f64,
-    brightness: f64,
+    pub temp: f64,
+    pub brightness: f64,
 }
 
 #[derive(Clone, Data, Debug, Lens, PartialEq)]
 pub struct HSIMode {
-    hue: f64,
-    saturation: f64,
-    intensity: f64,
+    pub hue: f64,
+    pub saturation: f64,
+    pub intensity: f64,
 }
 
 #[derive(Clone, Data, Debug, Lens, PartialEq)]
 pub struct AnimMode {
-    scene: f64,
-    brightness: f64,
+    pub scene: f64,
+    pub brightness: f64,
 }
