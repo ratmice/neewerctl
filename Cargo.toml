@@ -6,15 +6,15 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-druid = {git = "https://github.com/linebender/druid", rev = "2f5beb8faba648c170a485b8d6a00d0d991a1737", features=["im"]}
+druid = {git = "https://github.com/linebender/druid", rev = "2f5beb8faba648c170a485b8d6a00d0d991a1737"}
 druid-widget-nursery = {git="https://github.com/linebender/druid-widget-nursery.git", rev="b60a44d438d11d005d0cdab9f85afcb9532b57bd"}
 
 btleplug = {git = "https://github.com/deviceplug/btleplug.git", branch="dev"}
 crossfire = "0.1.7"
-im = "15.0.0"
 tokio = {version = "1.15.0", features = ["macros"]}
 tokio-stream = "0.1.8"
 strum_macros = "0.23.1"
 bytemuck = {version = "1.7.3", features = ["derive"]}
 lazy_static = "1.4.0"
 uuid = "0.8.2"
+imbl = "1.0.1"

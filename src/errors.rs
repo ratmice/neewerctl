@@ -6,7 +6,6 @@ use std::{error, fmt, io};
 #[derive(Debug)]
 pub enum AppError {
     BtleError(btleplug::Error),
-    GuiRecv(mpmc::TryRecvError),
     Shutdown(ShutdownError),
 
     IoError(std::io::Error),
@@ -69,10 +68,8 @@ impl<'a> fmt::Display for AppError {
         use AppError as AE;
         match self {
             AE::BtleError(e) => dump!(e),
-            AE::GuiRecv(e) => dump!(e),
             AE::Shutdown(e) => dump!(e),
             AE::IoError(e) => dump!(e),
-
             AE::Sapper => write!(
                 f,
                 "This error should only occurr during internal testing..."
@@ -86,7 +83,6 @@ impl<'a> error::Error for AppError {
         use AppError as AE;
         match self {
             AE::BtleError(e) => e.source(),
-            AE::GuiRecv(e) => e.source(),
             AE::IoError(e) => e.source(),
             AE::Shutdown(e) => e.source(),
             AE::Sapper => None,

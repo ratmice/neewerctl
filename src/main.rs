@@ -5,7 +5,12 @@ use druid::{
     commands, AppLauncher, /* Data, */ Env, LocalizedString, Menu, MenuItem, SysMods,
     WindowDesc, WindowId,
 };
-use std::panic;
+use imbl as im;
+//use imbl::HashMap;
+//use btle_plat::PeripheralId;
+//use std::borrow::BorrowMut;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::{panic, sync::Arc};
 use tokio::{select, sync::oneshot};
 use tokio_stream::{StreamExt, StreamMap};
 
@@ -23,14 +28,14 @@ use device::*;
 use errors::*;
 use streams::*;
 use widgets::*;
+static QUIT: AtomicBool = AtomicBool::new(false);
 
 fn idle_loop(
     rx: mpmc::RxBlocking<Dev2Gui, mpmc::SharedSenderFRecvB>,
     sink: SinkT,
     tx: mpmc::TxBlocking<Gui2Dev, mpmc::SharedSenderBRecvF>,
 ) -> Result<(), AppError> {
-    let mut finished = false;
-    while !finished {
+    while !QUIT.load(Relaxed) {
         let tx = tx.clone();
         let rx_msg = rx.try_recv();
         let _local_state = AppState::default();
@@ -39,38 +44,50 @@ fn idle_loop(
         //
         // If the gui exits and a shutdown is then sent,
         // The idle callback may never be called.
-        match &rx_msg {
-            Ok(Dev2Gui::Shutdown) => {
-                finished = true;
-            }
-            Ok(Dev2Gui::Connected(_incoming)) => {}
-            Ok(Dev2Gui::Disconnected(_incoming)) => {}
-            Ok(Dev2Gui::Changed(_incoming)) => {}
-            Err(mpmc::TryRecvError::Empty) => {}
-            Err(e) => {
-                // It'd be better to propagate this to the gui somehow,
-                // probably fall-through... After that, we'll need to set finish.
-                //
-                // finished = true;
-                return Err(AppError::GuiRecv(*e));
-            }
-        };
+        if let Ok(Dev2Gui::Shutdown) = rx_msg {
+            QUIT.store(true, Relaxed);
+            continue;
+        }
 
-        if !finished {
+        if !QUIT.load(Relaxed) {
             sink.add_idle_callback(move |app_state: &mut AppStateT| {
-                // rayon?
-                let changed = app_state
-                    .lights
-                    .clone()
-                    .into_iter()
-                    .filter(|x| x._changes_ != 0 && x.connected)
-                    .collect::<im::OrdSet<Light>>();
-                let tx_msg = tx.send(Gui2Dev::Changed(changed));
+                let all_lights = Arc::make_mut(&mut app_state.lights);
+                let incoming = match &rx_msg {
+                    Ok(Dev2Gui::Connected(incoming)) => Some(incoming),
+                    Ok(Dev2Gui::Disconnected(incoming)) => Some(incoming),
+                    Ok(Dev2Gui::Changed(incoming)) => Some(incoming),
+                    Err(mpmc::TryRecvError::Empty) => None,
+                    Err(_e) => {
+                        // It'd be better to propagate this to the gui somehow,
+                        // probably fall-through... After that, we'll need to set finish.
+                        //
+                        QUIT.store(true, Relaxed);
+                        return;
+                    }
+                    Ok(Dev2Gui::Shutdown) => {
+                        unreachable!()
+                    }
+                };
+                let mut outgoing = im::HashMap::new();
+                for (id, light) in all_lights.iter_mut() {
+                    if let Some(incoming) = incoming {
+                        if let Some(dev_light) = incoming.get(id) {
+                            if light.has_changes() {
+                                outgoing.insert(id.clone(), light.clone());
+                            }
+                            light.sync(dev_light)
+                        }
+                    }
+                }
+                let tx_msg = tx.send(Gui2Dev::Changed(outgoing));
                 match tx_msg {
                     // Likely sending too fast, we will try again the next time we receive our idle callback.
                     Err(mpmc::SendError(_)) => {}
                     Ok(()) => {}
                 }
+
+                // update the app state with the rx_msg.
+                let _state = Arc::make_mut(&mut app_state.lights);
             });
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -151,14 +168,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[derive(Debug)]
 pub enum Dev2Gui {
-    Connected(im::OrdSet<Light>),
-    Disconnected(im::OrdSet<Light>),
-    Changed(im::OrdSet<Light>),
+    Connected(im::HashMap<btle_plat::PeripheralId, Light>),
+    Disconnected(im::HashMap<btle_plat::PeripheralId, Light>),
+    Changed(im::HashMap<btle_plat::PeripheralId, Light>),
     Shutdown,
 }
 #[derive(Debug)]
 pub enum Gui2Dev {
-    Changed(im::OrdSet<Light>),
+    Changed(im::HashMap<btle_plat::PeripheralId, Light>),
 }
 
 fn bluetooth_loop(
@@ -201,7 +218,7 @@ fn bluetooth_loop(
                                 },
                                 btleplug::api::CentralEvent::DeviceDisconnected(id) => {
                                     disconnected_ids.insert(id.clone());
-                                    peripherals.remove(&id);
+                                    peripherals.remove(id);
                                     stream_map.remove(&StreamKey::BtleNotifications(id.clone()));
                                 },
                                 btleplug::api::CentralEvent::ManufacturerDataAdvertisement { .. } => {},

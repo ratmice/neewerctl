@@ -1,20 +1,23 @@
 use btleplug::platform::PeripheralId;
 use druid::{Data, Lens};
 use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
+use std::collections::BTreeMap;
 use std::iter::Iterator;
+use std::sync::Arc;
 use strum_macros::FromRepr;
 
 /// AppState...
 #[derive(Clone, Data, Debug, Lens)]
 pub struct AppState {
-    pub(crate) lights: im::OrdSet<Light>,
-    scanning: bool,
+    #[data(same_fn = "PartialEq::eq")]
+    pub(crate) lights: Arc<BTreeMap<PeripheralId, Light>>,
+    pub(crate) scanning: bool,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         AppState {
-            lights: im::OrdSet::new(),
+            lights: Arc::new(BTreeMap::new()),
             scanning: false,
         }
     }
@@ -22,11 +25,7 @@ impl Default for AppState {
 
 impl AppState {
     pub fn toggle_scanning(&mut self) {
-        if self.scanning {
-            self.scanning = false
-        } else {
-            self.scanning = true
-        }
+        self.scanning = !self.scanning;
     }
 }
 
@@ -34,9 +33,9 @@ impl AppState {
 #[derive(Clone, Data, Lens, Debug)]
 pub struct Light {
     #[data(same_fn = "PartialEq::eq")]
-    peripheral: PeripheralId,
-    mode: LightMode,
-    power: bool,
+    pub(crate) peripheral: PeripheralId,
+    pub(crate) mode: LightMode,
+    pub(crate) power: bool,
     pub(crate) connected: bool,
     #[data(ignore)]
     pub(crate) _changes_: u8,
@@ -119,8 +118,19 @@ fn change_iter() {
 }
 
 impl Light {
+    pub fn has_changes(&self) -> bool {
+        self._changes_ != 0
+    }
     pub fn changes(&self) -> impl Iterator<Item = Changed> {
         ChangeIterator::new(self._changes_)
+    }
+
+    pub fn toggle_power(&mut self) {
+        self.power = !self.power
+    }
+
+    pub fn sync(&mut self, _other: &Self) {
+        // FIXME..
     }
 }
 
