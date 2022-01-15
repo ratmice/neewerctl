@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::{convert::TryFrom, panic, sync::Arc};
 use tokio::{select, sync::oneshot};
 use tokio_stream::{StreamExt, StreamMap};
+use tracing_log::log;
 
 type AppStateT = appstate::AppState;
 type SinkT = druid::ExtEventSink;
@@ -89,7 +90,7 @@ fn idle_loop(
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    println!("Exiting gui thread");
+    log::info!("Exiting gui thread");
     Ok(())
 }
 
@@ -105,6 +106,10 @@ fn main_menu(_id: Option<WindowId>, _data: &AppState, _env: &Env) -> Menu<AppSta
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "needs-consoling")]
     console_subscriber::init();
+    #[cfg(not(feature = "needs-consoling"))]
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
 
     let window = WindowDesc::new(devices_widget())
         .title(LocalizedString::new("neewerctl-app").with_placeholder("neewerctl"))
@@ -140,14 +145,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     launcher.launch(AppState::default()).expect("launch failed");
 
-    println!("shutting down");
+    log::info!("shutting down");
     if !shutdown_tx.is_closed() {
         shutdown_tx
             .send(())
             .expect("Unable to shutdown runtime thread");
     } else {
         // This shouldn't normally happen
-        eprintln!("shutdown channel was closed before shutdown");
+        log::warn!("shutdown channel was closed before shutdown");
     }
 
     match gui_thread_hndl.join() {
@@ -265,7 +270,7 @@ fn bluetooth_loop(
                                 btleplug::api::CentralEvent::ServicesAdvertisement { id, .. } => {id},
                             };
                             if disconnected.contains(id) || peripherals.contains_key(id) {
-                                println!("{:?}", event)
+                                tracing::trace!("{:?}", event)
                             };
                         },
                         Some((StreamKey::BtleNotifications(_id), EventVariants::Notification(_value))) => {},
@@ -298,7 +303,6 @@ fn bluetooth_loop(
                                             };
                                         },
                                         Changed::Power => {
-                                            eprintln!("power {}", state.power);
                                             peripheral.write(&device::DEV_CTL, device::Power::from(state.power).bytes(), WriteType::WithoutResponse).await?;
                                             peripheral.write(&device::DEV_CTL, &device::POWER_STATUS, WriteType::WithoutResponse).await?;
                                             peripheral.write(&device::DEV_CTL, &device::CHANNEL_STATUS, WriteType::WithoutResponse).await?;
@@ -313,7 +317,7 @@ fn bluetooth_loop(
                     };
                 }
                 shutdown_msg = (&mut shutdown) => {
-                    println!("Shutting down: {:?}", shutdown_msg);
+                    log::info!("BTLE thread shutting down: {:?}", shutdown_msg);
                     return match shutdown_msg {
                         Ok(()) => {
                              match tx.send(Dev2Gui::Shutdown).await {
