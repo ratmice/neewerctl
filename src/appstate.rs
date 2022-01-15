@@ -1,6 +1,6 @@
 use btleplug::platform::PeripheralId;
 use druid::{Data, Lens};
-use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
+use std::cmp::{Eq, PartialEq};
 use std::collections::BTreeMap;
 use std::iter::Iterator;
 use std::sync::Arc;
@@ -9,7 +9,6 @@ use strum_macros::FromRepr;
 /// AppState...
 #[derive(Clone, Data, Debug, Lens)]
 pub struct AppState {
-    #[data(same_fn = "PartialEq::eq")]
     pub(crate) lights: Arc<BTreeMap<PeripheralId, Light>>,
     pub(crate) scanning: bool,
 }
@@ -30,10 +29,8 @@ impl AppState {
 }
 
 /// Light...
-#[derive(Clone, Data, Lens, Debug)]
+#[derive(Clone, Data, Lens, Debug, PartialEq)]
 pub struct Light {
-    #[data(same_fn = "PartialEq::eq")]
-    pub(crate) peripheral: PeripheralId,
     pub(crate) mode: LightMode,
     pub(crate) power: bool,
     pub(crate) connected: bool,
@@ -117,7 +114,24 @@ fn change_iter() {
     );
 }
 
+impl Default for Light {
+    fn default() -> Light {
+        Light {
+            mode: LightMode::CCT(CCTMode {
+                temp: 0.0,
+                brightness: 0.0,
+            }),
+            power: false,
+            connected: false,
+            _changes_: 0,
+        }
+    }
+}
+
 impl Light {
+    pub fn clear_changes(&mut self) {
+        self._changes_ = 0;
+    }
     pub fn has_changes(&self) -> bool {
         self._changes_ != 0
     }
@@ -131,26 +145,6 @@ impl Light {
 
     pub fn sync(&mut self, _other: &Self) {
         // FIXME..
-    }
-}
-
-impl PartialEq for Light {
-    fn eq(&self, other: &Self) -> bool {
-        self.peripheral == other.peripheral
-    }
-}
-
-impl Eq for Light {}
-
-impl Ord for Light {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.peripheral.cmp(&other.peripheral)
-    }
-}
-
-impl PartialOrd for Light {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.peripheral.cmp(&other.peripheral))
     }
 }
 

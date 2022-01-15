@@ -5,9 +5,10 @@ use druid::{
     commands, AppLauncher, /* Data, */ Env, LocalizedString, Menu, MenuItem, SysMods,
     WindowDesc, WindowId,
 };
+use im::hashmap::Entry as ImEntry;
 use imbl as im;
 //use imbl::HashMap;
-//use btle_plat::PeripheralId;
+use btle_plat::PeripheralId;
 //use std::borrow::BorrowMut;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::{panic, sync::Arc};
@@ -24,10 +25,10 @@ mod streams;
 mod widgets;
 
 use appstate::*;
-use device::*;
 use errors::*;
 use streams::*;
 use widgets::*;
+
 static QUIT: AtomicBool = AtomicBool::new(false);
 
 fn idle_loop(
@@ -37,57 +38,51 @@ fn idle_loop(
 ) -> Result<(), AppError> {
     while !QUIT.load(Relaxed) {
         let tx = tx.clone();
-        let rx_msg = rx.try_recv();
-        let _local_state = AppState::default();
+        let mut received = im::HashMap::new();
+        loop {
+            let dev_event = match rx.try_recv() {
+                Ok(Dev2Gui::Shutdown) => {
+                    return Ok(());
+                }
 
-        // This needs to be done outside of the idle callback.
-        //
-        // If the gui exits and a shutdown is then sent,
-        // The idle callback may never be called.
-        if let Ok(Dev2Gui::Shutdown) = rx_msg {
-            QUIT.store(true, Relaxed);
-            continue;
+                Err(mpmc::TryRecvError::Empty) => break,
+                Ok(Dev2Gui::DeviceEvent(dev_event)) => dev_event,
+                Err(tryrecv) => {
+                    return Err(AppError::Shutdown(FatalError::DataRecv(tryrecv)));
+                }
+            };
+            received.insert(dev_event.id(), dev_event);
         }
 
         if !QUIT.load(Relaxed) {
             sink.add_idle_callback(move |app_state: &mut AppStateT| {
-                let all_lights = Arc::make_mut(&mut app_state.lights);
-                let incoming = match &rx_msg {
-                    Ok(Dev2Gui::Connected(incoming)) => Some(incoming),
-                    Ok(Dev2Gui::Disconnected(incoming)) => Some(incoming),
-                    Ok(Dev2Gui::Changed(incoming)) => Some(incoming),
-                    Err(mpmc::TryRecvError::Empty) => None,
-                    Err(_e) => {
-                        // It'd be better to propagate this to the gui somehow,
-                        // probably fall-through... After that, we'll need to set finish.
-                        //
-                        QUIT.store(true, Relaxed);
-                        return;
-                    }
-                    Ok(Dev2Gui::Shutdown) => {
-                        unreachable!()
-                    }
-                };
-                let mut outgoing = im::HashMap::new();
-                for (id, light) in all_lights.iter_mut() {
-                    if let Some(incoming) = incoming {
-                        if let Some(dev_light) = incoming.get(id) {
-                            if light.has_changes() {
-                                outgoing.insert(id.clone(), light.clone());
+                let gui_lights = Arc::make_mut(&mut app_state.lights);
+                for (gui_id, gui_light) in &mut gui_lights.iter_mut() {
+                    if let ImEntry::Occupied(occupied) = received.entry(gui_id.clone()) {
+                        match occupied.get() {
+                            DeviceEvent::Connected(_, _) => {
+                                gui_light.connected = true;
                             }
-                            light.sync(dev_light)
+                            DeviceEvent::Disconnected(_, _) => {
+                                gui_light.connected = false;
+                            }
+                            DeviceEvent::Changed(_, dev_light) => {
+                                gui_light.sync(dev_light);
+                            }
+                        }
+                        occupied.remove();
+                    }
+                    if gui_light.has_changes() {
+                        match tx.send(Gui2Dev::Changed(gui_id.clone(), gui_light.clone())) {
+                            Ok(()) => gui_light.clear_changes(),
+                            Err(_) => {}
                         }
                     }
                 }
-                let tx_msg = tx.send(Gui2Dev::Changed(outgoing));
-                match tx_msg {
-                    // Likely sending too fast, we will try again the next time we receive our idle callback.
-                    Err(mpmc::SendError(_)) => {}
-                    Ok(()) => {}
-                }
 
-                // update the app state with the rx_msg.
-                let _state = Arc::make_mut(&mut app_state.lights);
+                for (dev_id, dev_event) in received {
+                    gui_lights.insert(dev_id, dev_event.light());
+                }
             });
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -166,16 +161,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub enum DeviceEvent {
+    Connected(PeripheralId, Light),
+    Disconnected(PeripheralId, Light),
+    Changed(PeripheralId, Light),
+}
 pub enum Dev2Gui {
-    Connected(im::HashMap<btle_plat::PeripheralId, Light>),
-    Disconnected(im::HashMap<btle_plat::PeripheralId, Light>),
-    Changed(im::HashMap<btle_plat::PeripheralId, Light>),
+    DeviceEvent(DeviceEvent),
     Shutdown,
 }
+impl DeviceEvent {
+    fn id(&self) -> PeripheralId {
+        match self {
+            Self::Connected(id, _) | Self::Disconnected(id, _) | Self::Changed(id, _) => id.clone(),
+        }
+    }
+    fn light(&self) -> Light {
+        match self {
+            Self::Connected(_, l) | Self::Disconnected(_, l) | Self::Changed(_, l) => l.clone(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Gui2Dev {
-    Changed(im::HashMap<btle_plat::PeripheralId, Light>),
+    Changed(PeripheralId, Light),
 }
 
 fn bluetooth_loop(
@@ -200,58 +211,77 @@ fn bluetooth_loop(
             StreamKey::GuiState,
             EventStreams::GuiState(rx.into_stream()),
         );
-        let mut peripherals: im::HashMap<btle_plat::PeripheralId, btle_plat::Peripheral> = im::HashMap::new();
-        let mut disconnected_ids: im::HashSet<btle_plat::PeripheralId> = im::HashSet::new();
+        let mut peripherals: im::HashMap<PeripheralId, btle_plat::Peripheral> = im::HashMap::new();
+        let mut disconnected: im::HashSet<PeripheralId> = im::HashSet::new();
         loop {
             select! {
                 event = stream_map.next() => {
                     match &event {
                         Some((StreamKey::BtleEvents, EventVariants::Event(event))) => {
-                            match event {
-                                btleplug::api::CentralEvent::DeviceDiscovered(_id) => {},
-                                btleplug::api::CentralEvent::DeviceUpdated(_id) => {},
+                            let id = match event {
+                                btleplug::api::CentralEvent::DeviceDiscovered(id) => {
+                                    let peripheral: btle_plat::Peripheral = adapter.peripheral(id).await?;
+                                    let properties = peripheral.properties().await?;
+                                    if let Some(properties) = properties {
+                                        if Some("NEEWER-RGB480".to_string()) == properties.local_name {
+                                                peripheral.connect().await?;
+                                                peripherals.insert(id.clone(), peripheral.clone());
+                                        }
+                                    };
+                                    id
+                                },
+                                btleplug::api::CentralEvent::DeviceUpdated(id) => {
+                                    if disconnected.contains(id) {
+                                        let peripheral = adapter.peripheral(id).await?;
+                                        peripheral.connect().await?;
+                                    };
+                                    id
+                                },
                                 btleplug::api::CentralEvent::DeviceConnected(id) => {
-                                    let peripheral = adapter.peripheral(id).await.unwrap();
+                                    let peripheral = adapter.peripheral(id).await?;
+                                    peripheral.discover_services().await.expect("Discovering services");
+                                    let characteristics = peripheral.characteristics();
+                                    assert!(characteristics.contains(&device::GATT) && characteristics.contains(&device::DEV_CTL));
                                     let notifs = peripheral.notifications().await.unwrap();
-                                    peripherals.insert(id.clone(), peripheral.clone());
                                     stream_map.insert(StreamKey::BtleNotifications(id.clone()), EventStreams::BtleNotifications(notifs));
+                                    disconnected.remove(id);
+                                    peripherals.insert(id.clone(), peripheral.clone());
+                                    tx.send(Dev2Gui::DeviceEvent(DeviceEvent::Connected(id.clone(), Light::default()))).await.map_err(|e| AppError::Shutdown(FatalError::MsgSend(e)))?;
+                                    id
                                 },
                                 btleplug::api::CentralEvent::DeviceDisconnected(id) => {
-                                    disconnected_ids.insert(id.clone());
+                                    disconnected.insert(id.clone());
                                     peripherals.remove(id);
                                     stream_map.remove(&StreamKey::BtleNotifications(id.clone()));
+                                    id
                                 },
-                                btleplug::api::CentralEvent::ManufacturerDataAdvertisement { .. } => {},
-                                btleplug::api::CentralEvent::ServiceDataAdvertisement { .. } => {},
-                                btleplug::api::CentralEvent::ServicesAdvertisement { .. } => {},
-                            }
+                                btleplug::api::CentralEvent::ManufacturerDataAdvertisement { id, .. } => {id},
+                                btleplug::api::CentralEvent::ServiceDataAdvertisement { id, .. } => {id},
+                                btleplug::api::CentralEvent::ServicesAdvertisement { id, .. } => {id},
+                            };
+                            if disconnected.contains(id) || peripherals.contains_key(id) {
+                                println!("{:?}", event)
+                            };
                         },
                         Some((StreamKey::BtleNotifications(_id), EventVariants::Notification(_value))) => {},
-                        Some((StreamKey::GuiState, EventVariants::GuiState(_state))) => {},
+                        Some((StreamKey::GuiState, EventVariants::GuiState(state))) => {
+                            println!("{:?}", state);
+                        },
                         Some((_, _)) => unreachable!(),
                         None => todo!(),
-                    }
-                    println!("{:?}", event)
+                    };
                 }
                 shutdown_msg = (&mut shutdown) => {
                     println!("Shutting down: {:?}", shutdown_msg);
                     return match shutdown_msg {
                         Ok(()) => {
-                            let gui = stream_map.remove(&StreamKey::GuiState);
-                            match gui {
-                                Some(EventStreams::GuiState(_stream)) => {
-                                    match tx.send(Dev2Gui::Shutdown).await {
-                                        Err(e) => {
-                                            Err(AppError::Shutdown(ShutdownError::MsgSend(e)))
-                                        }
-                                        Ok(()) => { Ok(()) },
-                                    }
-                                }
-                                _ => { Err(AppError::Shutdown(ShutdownError::Other)) }
-                            }
+                             match tx.send(Dev2Gui::Shutdown).await {
+                                 Err(e) => Err(AppError::Shutdown(FatalError::MsgSend(e))),
+                                 Ok(()) => { Ok(()) },
+                             }
                         }
                         Err(e) => {
-                            Err(AppError::Shutdown(ShutdownError::MsgRecv(e)))
+                            Err(AppError::Shutdown(FatalError::ShutdownRecv(e)))
                         }
                     }
                 }

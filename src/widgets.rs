@@ -22,6 +22,7 @@ impl ListIter<Light> for AppState {
             cb(&mut ret, i);
 
             if !v.same(&ret) {
+                v._changes_ |= ret._changes_;
                 *v = ret;
             }
         }

@@ -6,8 +6,7 @@ use std::{error, fmt, io};
 #[derive(Debug)]
 pub enum AppError {
     BtleError(btleplug::Error),
-    Shutdown(ShutdownError),
-
+    Shutdown(FatalError),
     IoError(std::io::Error),
 
     // This should probably be cfg'd out.
@@ -16,13 +15,13 @@ pub enum AppError {
     Sapper,
 }
 #[derive(Debug)]
-pub enum ShutdownError {
-    MsgRecv(oneshot::error::RecvError),
+pub enum FatalError {
+    ShutdownRecv(oneshot::error::RecvError),
     MsgSend(mpmc::SendError<Dev2Gui>),
-    Other,
+    DataRecv(mpmc::TryRecvError),
 }
 
-impl<'a> fmt::Display for ShutdownError {
+impl<'a> fmt::Display for FatalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         macro_rules! dump {
             ($e: ident) => {
@@ -30,19 +29,19 @@ impl<'a> fmt::Display for ShutdownError {
             };
         }
         match self {
-            ShutdownError::MsgRecv(e) => dump!(e),
-            ShutdownError::MsgSend(e) => dump!(e),
-            ShutdownError::Other => write!(f, "Encountered other error."),
+            FatalError::ShutdownRecv(e) => dump!(e),
+            FatalError::MsgSend(e) => dump!(e),
+            FatalError::DataRecv(e) => dump!(e),
         }
     }
 }
 
-impl<'a> error::Error for ShutdownError {
+impl<'a> error::Error for FatalError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            ShutdownError::MsgRecv(e) => e.source(),
-            ShutdownError::MsgSend(e) => e.source(),
-            ShutdownError::Other => None,
+            FatalError::ShutdownRecv(e) => e.source(),
+            FatalError::MsgSend(e) => e.source(),
+            FatalError::DataRecv(e) => e.source(),
         }
     }
 }
