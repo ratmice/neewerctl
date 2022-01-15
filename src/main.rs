@@ -1,4 +1,4 @@
-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
+use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform as btle_plat;
 use crossfire::mpmc;
 use druid::{
@@ -11,7 +11,7 @@ use imbl as im;
 use btle_plat::PeripheralId;
 //use std::borrow::BorrowMut;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-use std::{panic, sync::Arc};
+use std::{convert::TryFrom, panic, sync::Arc};
 use tokio::{select, sync::oneshot};
 use tokio_stream::{StreamExt, StreamMap};
 
@@ -28,6 +28,8 @@ use appstate::*;
 use errors::*;
 use streams::*;
 use widgets::*;
+
+use device::Packet as _;
 
 static QUIT: AtomicBool = AtomicBool::new(false);
 
@@ -73,9 +75,9 @@ fn idle_loop(
                         occupied.remove();
                     }
                     if gui_light.has_changes() {
-                        match tx.send(Gui2Dev::Changed(gui_id.clone(), gui_light.clone())) {
-                            Ok(()) => gui_light.clear_changes(),
-                            Err(_) => {}
+                        if let Ok(()) = tx.send(Gui2Dev::Changed(gui_id.clone(), gui_light.clone()))
+                        {
+                            gui_light.clear_changes()
                         }
                     }
                 }
@@ -265,7 +267,38 @@ fn bluetooth_loop(
                         },
                         Some((StreamKey::BtleNotifications(_id), EventVariants::Notification(_value))) => {},
                         Some((StreamKey::GuiState, EventVariants::GuiState(state))) => {
-                            println!("{:?}", state);
+                            let Gui2Dev::Changed(id, state)  = state;
+                            let peripheral = peripherals.get(id);
+                            if let Some(peripheral) = peripheral {
+                                for change in state.changes() {
+                                    match change {
+                                        Changed::Mode => {
+                                            // Should probably use a ref instead of try_from.
+                                            // With that I believe we could return msg.bytes, and
+                                            // have only one call to write...
+                                            match &state.mode {
+                                                LightMode::CCT(mode) => {
+                                                     let pkt = device::CCT::try_from(mode.clone())?;
+                                                     let msg = pkt.bytes();
+                                                     peripheral.write(&device::DEV_CTL, msg, WriteType::WithoutResponse).await?;
+                                                }
+                                                LightMode::HSI(mode) => {
+                                                    let pkt = device::HSI::try_from(mode.clone())?;
+                                                    let msg = pkt.bytes();
+                                                    peripheral.write(&device::DEV_CTL, msg, WriteType::WithoutResponse).await?;
+                                                }
+                                                LightMode::Anim(mode) => {
+                                                    let pkt = device::Anim::try_from(mode.clone())?;
+                                                    let msg = pkt.bytes();
+                                                    peripheral.write(&device::DEV_CTL, msg, WriteType::WithoutResponse).await?;
+                                                },
+                                            };
+                                        },
+                                        Changed::Power => peripheral.write(&device::DEV_CTL, device::Power::from(state.power).bytes(), WriteType::WithoutResponse).await?,
+                                        Changed::Connected => todo!(),
+                                    }
+                                }
+                            }
                         },
                         Some((_, _)) => unreachable!(),
                         None => todo!(),

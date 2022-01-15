@@ -1,3 +1,4 @@
+use crate::device;
 use crate::mpmc;
 use crate::oneshot;
 use crate::Dev2Gui;
@@ -8,12 +9,13 @@ pub enum AppError {
     BtleError(btleplug::Error),
     Shutdown(FatalError),
     IoError(std::io::Error),
-
+    PacketError(device::ConversionToPacketError),
     // This should probably be cfg'd out.
     // Use this to throw a random error and test out error paths in the code.
     #[allow(unused)]
     Sapper,
 }
+
 #[derive(Debug)]
 pub enum FatalError {
     ShutdownRecv(oneshot::error::RecvError),
@@ -57,6 +59,12 @@ impl From<btleplug::Error> for AppError {
         AppError::BtleError(e)
     }
 }
+impl From<device::ConversionToPacketError> for AppError {
+    fn from(e: device::ConversionToPacketError) -> Self {
+        AppError::PacketError(e)
+    }
+}
+
 impl<'a> fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         macro_rules! dump {
@@ -66,6 +74,7 @@ impl<'a> fmt::Display for AppError {
         }
         use AppError as AE;
         match self {
+            AE::PacketError(e) => dump!(e),
             AE::BtleError(e) => dump!(e),
             AE::Shutdown(e) => dump!(e),
             AE::IoError(e) => dump!(e),
@@ -81,9 +90,10 @@ impl<'a> error::Error for AppError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         use AppError as AE;
         match self {
+            AE::PacketError(e) => e.source(),
             AE::BtleError(e) => e.source(),
-            AE::IoError(e) => e.source(),
             AE::Shutdown(e) => e.source(),
+            AE::IoError(e) => e.source(),
             AE::Sapper => None,
         }
     }

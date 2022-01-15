@@ -8,6 +8,7 @@ use std::marker::PhantomData;
 mod _errors_ {
     use crate::{AnimMode, CCTMode, HSIMode};
     use std::{error, fmt};
+
     #[derive(Debug)]
     pub enum ConversionToPacketError {
         CCT(CCTMode),
@@ -16,29 +17,27 @@ mod _errors_ {
     }
 
     impl<'a> fmt::Display for ConversionToPacketError {
-        #[rustfmt::skip]
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CCT(cct) => write!(f, "Error converting Mode to packet {:?}", cct),
-            Self::HSI(hsi) => write!(f, "Error converting Mode to packet {:?}", hsi),
-            Self::Anim(anim) => write!(f, "Error converting Mode to packet {:?}", anim),
+            match self {
+                Self::CCT(cct) => write!(f, "Error converting Mode to packet {:?}", cct),
+                Self::HSI(hsi) => write!(f, "Error converting Mode to packet {:?}", hsi),
+                Self::Anim(anim) => write!(f, "Error converting Mode to packet {:?}", anim),
+            }
         }
-    }
     }
 
     impl error::Error for ConversionToPacketError {
-        #[rustfmt::skip]
         fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            ConversionToPacketError::CCT(_) => None,
-            ConversionToPacketError::HSI(_) => None,
-            ConversionToPacketError::Anim(_) => None,
+            match self {
+                ConversionToPacketError::CCT(_) => None,
+                ConversionToPacketError::HSI(_) => None,
+                ConversionToPacketError::Anim(_) => None,
+            }
         }
-    }
     }
 }
 
-use _errors_::*;
+pub use _errors_::*;
 
 //#[allow(unused)]
 #[rustfmt::skip]
@@ -192,6 +191,9 @@ pub trait Packet: Sized + Pod + Zeroable + Copy {
     const MSG_END: usize = Self::HEADER_SIZE + Self::DATA_SIZE;
 
     fn gen_checksum(&self) -> u8 {
+        // This is actually a terrible idea for checksumming,
+        // but certainly there is plenty of other uses for this style of
+        // packet construction and I wanted to mess with it.
         Self::HEADER_SUM.wrapping_add(self.msg_sum())
     }
 
