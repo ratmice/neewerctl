@@ -244,11 +244,14 @@ fn bluetooth_loop(
                                     peripheral.discover_services().await.expect("Discovering services");
                                     let characteristics = peripheral.characteristics();
                                     assert!(characteristics.contains(&device::GATT) && characteristics.contains(&device::DEV_CTL));
-                                    let notifs = peripheral.notifications().await.unwrap();
+                                    let notifs = peripheral.notifications().await?;
                                     stream_map.insert(StreamKey::BtleNotifications(id.clone()), EventStreams::BtleNotifications(notifs));
+                                    peripheral.subscribe(&device::GATT).await?;
                                     disconnected.remove(id);
                                     peripherals.insert(id.clone(), peripheral.clone());
                                     tx.send(Dev2Gui::DeviceEvent(DeviceEvent::Connected(id.clone(), Light::default()))).await.map_err(|e| AppError::Shutdown(FatalError::MsgSend(e)))?;
+                                    peripheral.write(&device::DEV_CTL, &device::POWER_STATUS, WriteType::WithoutResponse).await?;
+                                    peripheral.write(&device::DEV_CTL, &device::CHANNEL_STATUS, WriteType::WithoutResponse).await?;
                                     id
                                 },
                                 btleplug::api::CentralEvent::DeviceDisconnected(id) => {
@@ -294,7 +297,12 @@ fn bluetooth_loop(
                                                 },
                                             };
                                         },
-                                        Changed::Power => peripheral.write(&device::DEV_CTL, device::Power::from(state.power).bytes(), WriteType::WithoutResponse).await?,
+                                        Changed::Power => {
+                                            eprintln!("power {}", state.power);
+                                            peripheral.write(&device::DEV_CTL, device::Power::from(state.power).bytes(), WriteType::WithoutResponse).await?;
+                                            peripheral.write(&device::DEV_CTL, &device::POWER_STATUS, WriteType::WithoutResponse).await?;
+                                            peripheral.write(&device::DEV_CTL, &device::CHANNEL_STATUS, WriteType::WithoutResponse).await?;
+                                        }
                                         Changed::Connected => todo!(),
                                     }
                                 }
