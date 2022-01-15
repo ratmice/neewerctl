@@ -6,8 +6,9 @@ use druid::widget::{
     Padding, Scroll, Slider, Spinner, Stepper, Switch, Widget, WidgetExt,
 };
 use druid::{Data, Env, LocalizedString};
-use druid_widget_nursery::prism::{Closures, Prism};
+use druid_widget_nursery::prism::{Closures};
 use druid_widget_nursery::{MultiRadio, OnChange};
+
 impl ListIter<Light> for AppState {
     fn for_each(&self, mut cb: impl FnMut(&Light, usize)) {
         for (i, (_k, v)) in self.lights.iter().enumerate() {
@@ -30,38 +31,6 @@ impl ListIter<Light> for AppState {
 
     fn data_len(&self) -> usize {
         self.lights.len()
-    }
-}
-
-#[derive(Clone, Data, Debug, PartialEq)]
-struct CCTPrism;
-impl Prism<LightMode, CCTMode> for CCTPrism {
-    fn get(&self, data: &LightMode) -> Option<CCTMode> {
-        if let LightMode::CCT(cct) = data {
-            Some(cct.clone())
-        } else {
-            None
-        }
-    }
-
-    fn put(&self, data: &mut LightMode, inner: CCTMode) {
-        *data = LightMode::CCT(inner);
-    }
-}
-
-#[derive(Clone, Data, Debug, PartialEq)]
-struct HSIPrism;
-impl Prism<LightMode, HSIMode> for HSIPrism {
-    fn get(&self, data: &LightMode) -> Option<HSIMode> {
-        if let LightMode::HSI(hsi) = data {
-            Some(hsi.clone())
-        } else {
-            None
-        }
-    }
-
-    fn put(&self, data: &mut LightMode, inner: HSIMode) {
-        *data = LightMode::HSI(inner);
     }
 }
 

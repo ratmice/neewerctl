@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::iter::Iterator;
 use std::sync::Arc;
 use strum_macros::FromRepr;
+use druid_widget_nursery::{prism::Prism};
 
 /// AppState...
 #[derive(Clone, Data, Debug, Lens)]
@@ -149,7 +150,7 @@ impl Light {
 }
 
 /// LightMode...
-#[derive(Clone, Data, Debug, PartialEq)]
+#[derive(Clone, Data, Debug, PartialEq, Prism)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum LightMode {
     CCT(CCTMode),

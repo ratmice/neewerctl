@@ -109,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window = WindowDesc::new(devices_widget())
         .title(LocalizedString::new("neewerctl-app").with_placeholder("neewerctl"))
         .menu(main_menu);
-    let launcher = AppLauncher::with_window(window);
+    let launcher = AppLauncher::with_window(window).configure_env(druid_widget_nursery::configure_env);
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let sink = launcher.get_external_handle();
