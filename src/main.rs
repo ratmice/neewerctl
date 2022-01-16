@@ -22,11 +22,13 @@ mod device;
 mod errors;
 mod streams;
 mod widgets;
+mod semaphore;
 
 use appstate::*;
 use errors::*;
 use streams::*;
 use widgets::*;
+use semaphore::*;
 
 use device::Packet as _;
 
