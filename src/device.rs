@@ -290,11 +290,7 @@ pub struct Power {
 
 impl Packet for Power {
     packet!(0x81);
-    /*
-        fn msg_sum(&self) -> u8 {
-            self.onoff
-        }
-    */
+
     fn range_check(&self) -> bool {
         (1..2).contains(&self.onoff)
     }

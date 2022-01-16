@@ -150,16 +150,12 @@ pub fn device_widget() -> impl Widget<Light> {
     let mut col = Flex::column().main_axis_alignment(MainAxisAlignment::Start);
     let mut row_top = Flex::row().main_axis_alignment(MainAxisAlignment::Start);
 
-    //let channel = tx_gui.clone();
     let switch = LensWrap::new(Switch::new(), Light::power).on_click(
         move |_ctxt, data: &mut Light, _env| {
             data.toggle_power();
         },
     );
 
-    /*  let name_label = Label::new(|d: &Light, _: &Env| format!("{}", d.name));
-    row_top.add_child(name_label);*/
-    //    let mut state_temp = Label::new(|d: &CCTMode, _: &Env| format!("{:>7.2}", d.temp));
     let switch_label = Label::new("Power:");
     row_top.add_child(Padding::new(5.0, switch_label));
     row_top.add_child(Padding::new(5.0, switch));
@@ -192,7 +188,6 @@ pub fn device_widget() -> impl Widget<Light> {
         data._changes_ |= Changed::Mode as u8;
     }));
 
-    //let channel = tx_gui.clone();
     let b = MultiRadio::new(
         "HSI",
         hsi_widget(),
