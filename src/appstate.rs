@@ -1,11 +1,11 @@
 use btleplug::platform::PeripheralId;
 use druid::{Data, Lens};
+use druid_widget_nursery::prism::Prism;
 use std::cmp::{Eq, PartialEq};
 use std::collections::BTreeMap;
 use std::iter::Iterator;
 use std::sync::Arc;
 use strum_macros::FromRepr;
-use druid_widget_nursery::{prism::Prism};
 
 /// AppState...
 #[derive(Clone, Data, Debug, Lens)]
@@ -119,7 +119,7 @@ impl Default for Light {
     fn default() -> Light {
         Light {
             mode: LightMode::CCT(CCTMode {
-                temp: 0.0,
+                temp: 32.0,
                 brightness: 0.0,
             }),
             power: false,
@@ -141,7 +141,8 @@ impl Light {
     }
 
     pub fn toggle_power(&mut self) {
-        self.power = !self.power
+        self.power = !self.power;
+        self._changes_ |= Changed::Power as u8;
     }
 
     pub fn sync(&mut self, _other: &Self) {

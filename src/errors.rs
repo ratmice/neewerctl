@@ -10,6 +10,7 @@ pub enum AppError {
     Shutdown(FatalError),
     IoError(std::io::Error),
     PacketError(device::ConversionToPacketError),
+    MissingPeripheral(btleplug::platform::PeripheralId),
     // This should probably be cfg'd out.
     // Use this to throw a random error and test out error paths in the code.
     #[allow(unused)]
@@ -78,6 +79,11 @@ impl<'a> fmt::Display for AppError {
             AE::BtleError(e) => dump!(e),
             AE::Shutdown(e) => dump!(e),
             AE::IoError(e) => dump!(e),
+            AE::MissingPeripheral(id) => write!(
+                f,
+                "Cannot find Peripheral for the PeripheralId given {:?}",
+                id
+            ),
             AE::Sapper => write!(
                 f,
                 "This error should only occurr during internal testing..."
@@ -94,6 +100,7 @@ impl<'a> error::Error for AppError {
             AE::BtleError(e) => e.source(),
             AE::Shutdown(e) => e.source(),
             AE::IoError(e) => e.source(),
+            AE::MissingPeripheral(_) => None,
             AE::Sapper => None,
         }
     }

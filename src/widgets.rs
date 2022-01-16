@@ -6,7 +6,7 @@ use druid::widget::{
     Padding, Scroll, Slider, Spinner, Stepper, Switch, Widget, WidgetExt,
 };
 use druid::{Data, Env, LocalizedString};
-use druid_widget_nursery::prism::{Closures};
+use druid_widget_nursery::prism::Closures;
 use druid_widget_nursery::{MultiRadio, OnChange};
 
 impl ListIter<Light> for AppState {
