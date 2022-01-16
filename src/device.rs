@@ -88,13 +88,13 @@ mod _in_band_ {
     ///
     /// len == number of u8
     ///
-    /// OP            magic?      cmd   len      msg                                     checksum
-    ///               --------    ----  ----     ----  -------------------------------------------- 
-    /// LIGHT_PWR_ON  [0x78u8,    0x81, 0x01,    0x01, .iter().fold(0u8, |x, y| x.wrapping_add(*y))]
-    /// LIGHT_PWR_OFF [0x78u8,    0x81, 0x01,    0x02, checksum]
+    /// OP              magic?      cmd   len      msg                                     checksum
+    ///                 --------    ----  ----     ----  -------------------------------------------- 
+    /// LIGHT_PWR_ON    [0x78u8,    0x81, 0x01,    0x01, .iter().fold(0u8, |x, y| x.wrapping_add(*y))]
+    /// LIGHT_PWR_OFF   [0x78u8,    0x81, 0x01,    0x02, checksum]
     ///
-    /// ACK?          [0x78u8,    0x84, 0x00, checksum]  responds on Notify service
-    /// PWR_STATUS?   [0x78u8,    0x85, 0x00, checksum]  ""
+    /// CHANNEL_STATUS? [0x78u8,    0x84, 0x00, checksum]  responds on Notify service
+    /// PWR_STATUS?     [0x78u8,    0x85, 0x00, checksum]  ""
     /// 
     /// // Mode data transimission
     ///  (Checksum excluded, see above)
@@ -116,6 +116,15 @@ mod _in_band_ {
     /// scene:      u8   |  0..9
     /// [0x78, 0x88, 2, brightness, scene, checksum];
 
+    /// Notifications
+    /// --------------
+    /// cmd: CHANNEL_STATUS
+    /// msg byte range: 0-8
+    /// [0x78, 0x01, 0x01, 0x08, checksum]
+    ///
+    /// cmd: POWER_STATUS
+    /// msg byte range: 1-2
+    /// [0x78, 0x02, 0x01, 0x01, checksum]
 
     // To dev_ctl
     pub const POWER_ON: [u8; 5] = [0x78, 0x81, 0x01, 0x01, 0xFB];
