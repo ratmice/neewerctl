@@ -20,7 +20,8 @@
 */
 
 use std::ops::Drop;
-use std::sync::{Mutex, Condvar};
+use std::sync::{Condvar, Mutex, TryLockError};
+use std::{error, fmt};
 
 /// A counting, blocking, semaphore.
 ///
@@ -60,6 +61,29 @@ pub struct Semaphore {
 /// dropped.
 pub struct SemaphoreGuard<'a> {
     sem: &'a Semaphore,
+}
+
+#[derive(Debug)]
+pub enum TryAcquireError {
+    WouldBlock,
+}
+
+impl<T> From<TryLockError<T>> for TryAcquireError {
+    fn from(_err: TryLockError<T>) -> Self {
+        TryAcquireError::WouldBlock
+    }
+}
+
+impl fmt::Display for TryAcquireError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        "try_acquire failed because the operation would block".fmt(f)
+    }
+}
+
+impl error::Error for TryAcquireError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        None
+    }
 }
 
 impl Semaphore {
@@ -102,9 +126,19 @@ impl Semaphore {
     ///
     /// This function is semantically equivalent to an `acquire` followed by a
     /// `release` when the guard returned is dropped.
+    #[allow(unused)]
     pub fn access(&self) -> SemaphoreGuard {
         self.acquire();
         SemaphoreGuard { sem: self }
+    }
+
+    pub fn try_acquire(&self) -> Result<(), TryAcquireError> {
+        let mut count = self.lock.try_lock()?;
+        if *count <= 0 {
+            return Err(TryAcquireError::WouldBlock);
+        }
+        *count -= 1;
+        Ok(())
     }
 }
 
@@ -116,12 +150,12 @@ impl<'a> Drop for SemaphoreGuard<'a> {
 
 #[cfg(test)]
 mod tests {
-    use prelude::v1::*;
+    use std::prelude::v1::*;
 
-    use sync::Arc;
     use super::Semaphore;
-    use sync::mpsc::channel;
-    use thread;
+    use std::sync::mpsc::channel;
+    use std::sync::Arc;
+    use std::thread;
 
     #[test]
     fn test_sem_acquire_release() {
@@ -141,7 +175,7 @@ mod tests {
     fn test_sem_as_mutex() {
         let s = Arc::new(Semaphore::new(1));
         let s2 = s.clone();
-        let _t = thread::spawn(move|| {
+        let _t = thread::spawn(move || {
             let _g = s2.access();
         });
         let _g = s.access();
@@ -153,7 +187,7 @@ mod tests {
         let (tx, rx) = channel();
         let s = Arc::new(Semaphore::new(0));
         let s2 = s.clone();
-        let _t = thread::spawn(move|| {
+        let _t = thread::spawn(move || {
             s2.acquire();
             tx.send(()).unwrap();
         });
@@ -164,7 +198,7 @@ mod tests {
         let (tx, rx) = channel();
         let s = Arc::new(Semaphore::new(0));
         let s2 = s.clone();
-        let _t = thread::spawn(move|| {
+        let _t = thread::spawn(move || {
             s2.release();
             let _ = rx.recv();
         });
@@ -180,7 +214,7 @@ mod tests {
         let s2 = s.clone();
         let (tx1, rx1) = channel();
         let (tx2, rx2) = channel();
-        let _t = thread::spawn(move|| {
+        let _t = thread::spawn(move || {
             let _g = s2.access();
             let _ = rx2.recv();
             tx1.send(()).unwrap();
@@ -197,7 +231,7 @@ mod tests {
         let (tx, rx) = channel();
         {
             let _g = s.access();
-            thread::spawn(move|| {
+            thread::spawn(move || {
                 tx.send(()).unwrap();
                 drop(s2.access());
                 tx.send(()).unwrap();
@@ -205,5 +239,52 @@ mod tests {
             rx.recv().unwrap(); // wait for child to come alive
         }
         rx.recv().unwrap(); // wait for child to be done
+    }
+
+    fn fight(semaphore: Arc<Semaphore>) -> thread::JoinHandle<(i32, i32)> {
+        thread::spawn(move || {
+            let mut acquire_count = 0;
+            let mut fail_acquire_count = 0;
+            let mut have_semaphore;
+            loop {
+                have_semaphore = semaphore.try_acquire();
+                if let Ok(()) = have_semaphore {
+                    std::thread::yield_now();
+                    semaphore.release();
+                    acquire_count += 1;
+                    if acquire_count == 1000 || fail_acquire_count > 600000 {
+                        return (acquire_count, fail_acquire_count);
+                    }
+                } else if fail_acquire_count < 600000 {
+                    fail_acquire_count += 1;
+                } else {
+                    return (acquire_count, fail_acquire_count);
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn test_sem_try_acquire() {
+        let s = Arc::new(Semaphore::new(2));
+        let hndl1 = fight(s.clone());
+        let hndl2 = fight(s.clone());
+        let hndl3 = fight(s);
+        let a = hndl1.join().unwrap();
+        let b = hndl2.join().unwrap();
+        let c = hndl3.join().unwrap();
+        println!("{:?} {:?} {:?}", a, b, c);
+        assert_eq!(a.0, 1000);
+        assert_eq!(b.0, 1000);
+        assert_eq!(c.0, 1000);
+    }
+
+    #[test]
+    fn test_sem_try_acquire_zero() {
+        let s = Arc::new(Semaphore::new(0));
+        let hndl5 = fight(s);
+        let be_zero = hndl5.join().unwrap();
+
+        assert_eq!(be_zero.0, 0);
     }
 }

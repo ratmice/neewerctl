@@ -10,7 +10,6 @@ use druid::{
 use im::hashmap::Entry as ImEntry;
 use imbl as im;
 use std::{convert::TryFrom, panic, sync::Arc};
-use tokio::{select, sync::oneshot};
 use tokio_stream::{StreamExt, StreamMap};
 use tracing_log::log;
 
@@ -20,19 +19,20 @@ type SinkT = druid::ExtEventSink;
 mod appstate;
 mod device;
 mod errors;
+mod semaphore;
 mod streams;
 mod widgets;
-mod semaphore;
 
 use appstate::*;
 use errors::*;
+use semaphore::*;
 use streams::*;
 use widgets::*;
-use semaphore::*;
 
 use device::Packet as _;
 
 fn idle_loop(
+    shutdown: Arc<Semaphore>,
     rx: mpmc::RxBlocking<Dev2Gui, mpmc::SharedSenderFRecvB>,
     sink: SinkT,
     tx: mpmc::TxBlocking<Gui2Dev, mpmc::SharedSenderBRecvF>,
@@ -41,10 +41,11 @@ fn idle_loop(
         let tx = tx.clone();
         let mut received = im::HashMap::new();
         loop {
+            if let Ok(()) = shutdown.try_acquire() {
+                return Ok(());
+            }
+
             match rx.try_recv() {
-                Ok(Dev2Gui::Shutdown) => {
-                    return Ok(());
-                }
                 Err(mpmc::TryRecvError::Empty) => {
                     break;
                 }
@@ -91,16 +92,17 @@ fn idle_loop(
 
 fn main_menu(_id: Option<WindowId>, _data: &AppState, _env: &Env) -> Menu<AppState> {
     Menu::empty().entry(
-    Menu::new(LocalizedString::new("common-menu-file-menu"))
-    .entry(
+        Menu::new(LocalizedString::new("common-menu-file-menu"))
+            .entry(
                 MenuItem::new(LocalizedString::new("common-menu-file-close"))
-                .command(commands::CLOSE_WINDOW)
-
-    ).entry(
-        MenuItem::new(LocalizedString::new("Quit"))
-            .command(commands::QUIT_APP)
-            .hotkey(SysMods::Cmd, "q"),
-    ))
+                    .command(commands::CLOSE_WINDOW),
+            )
+            .entry(
+                MenuItem::new(LocalizedString::new("Quit"))
+                    .command(commands::QUIT_APP)
+                    .hotkey(SysMods::Cmd, "q"),
+            ),
+    )
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,27 +119,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let launcher =
         AppLauncher::with_window(window).configure_env(druid_widget_nursery::configure_env);
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let shutdown = Arc::new(Semaphore::new(2));
+    let ((), ()) = (shutdown.acquire(), shutdown.acquire());
     let sink = launcher.get_external_handle();
 
-    let hndl = start_threads(shutdown_rx, sink);
+    let hndl = start_threads(shutdown.clone(), sink);
     launcher.launch(AppState::default()).expect("launch failed");
 
-    if !shutdown_tx.is_closed() {
-        shutdown_tx
-            .send(())
-            .expect("Unable to shutdown runtime thread");
-    } else {
-        // This shouldn't normally happen
-        log::error!("shutdown channel was closed before shutdown");
-    }
+    shutdown.release();
+    shutdown.release();
 
     let _ = hndl.join();
 
     Ok(())
 }
 
-fn start_threads(shutdown_rx: tokio::sync::oneshot::Receiver<()>, sink: druid::ExtEventSink) -> std::thread::JoinHandle<()> {
+fn start_threads(
+    shutdown: Arc<Semaphore>,
+    sink: druid::ExtEventSink,
+) -> std::thread::JoinHandle<()> {
     //
     // If we hit this limit we are drop events from the btle thread,
     // so pick something high enough that if we hit it,
@@ -154,38 +154,39 @@ fn start_threads(shutdown_rx: tokio::sync::oneshot::Receiver<()>, sink: druid::E
     // The gui -> Dev bounds don't matter much we just retry next idle loop.
     let (tx_gui, rx_dev) = mpmc::bounded_tx_blocking_rx_future(255);
 
+    let gui_thread_hndl = {
+        let shutdown = shutdown.clone();
+        std::thread::spawn(move || idle_loop(shutdown, rx_gui, sink, tx_gui))
+    };
 
-        let gui_thread_hndl = std::thread::spawn(move || idle_loop(rx_gui, sink, tx_gui));
+    let btle_thread_hndl = std::thread::spawn(move || {
+        btle_loop(shutdown.clone(), tx_dev, rx_dev)
 
+        //let result: Result<(), AppError> = Ok(());
+        //let result: Result<(), AppError> = Err(AppError::Sapper);
+    });
 
-        let btle_thread_hndl = std::thread::spawn(move || {
-            btle_loop(shutdown_rx, tx_dev, rx_dev)
-
-            //let result: Result<(), AppError> = Ok(());
-            //let result: Result<(), AppError> = Err(AppError::Sapper);
-        });
-
-        std::thread::spawn(move || {
-            match btle_thread_hndl.join() {
-                    Err(e) => panic::resume_unwind(e),
-                    Ok(Ok(())) => {
-                        log::info!("BTLE thread exited ok.")
-                    }
-                    Ok(Err(e)) => {
-                        log::info!("BTLE thread exited with error: {:?}", e)
-                    }
-            };
-            // Order matters here because btle_thread_hndl tells this one to shutdown,
-            // If we joined gui_thread_hndl first, everything might exit before
-            // gui_thread shutds down.
-            match gui_thread_hndl.join() {
-                Err(e) => panic::resume_unwind(e),
-                Ok(Ok(())) => {
-                        log::info!("GUI thread exited ok.")
-                }
-                Ok(Err(e)) => log::info!("GUI Thread exited with error: {:?}", e),
-            };
-        })
+    std::thread::spawn(move || {
+        match btle_thread_hndl.join() {
+            Err(e) => panic::resume_unwind(e),
+            Ok(Ok(())) => {
+                log::info!("BTLE thread exited ok.")
+            }
+            Ok(Err(e)) => {
+                log::info!("BTLE thread exited with error: {:?}", e)
+            }
+        };
+        // Order matters here because btle_thread_hndl tells this one to shutdown,
+        // If we joined gui_thread_hndl first, everything might exit before
+        // gui_thread shutds down.
+        match gui_thread_hndl.join() {
+            Err(e) => panic::resume_unwind(e),
+            Ok(Ok(())) => {
+                log::info!("GUI thread exited ok.")
+            }
+            Ok(Err(e)) => log::info!("GUI Thread exited with error: {:?}", e),
+        };
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -196,7 +197,6 @@ pub enum DeviceEvent {
 }
 pub enum Dev2Gui {
     DeviceEvent(DeviceEvent),
-    Shutdown,
 }
 impl DeviceEvent {
     fn id(&self) -> PeripheralId {
@@ -219,11 +219,7 @@ pub enum Gui2Dev {
 type AsyncSender = mpmc::TxFuture<Dev2Gui, mpmc::SharedSenderFRecvB>;
 type AsyncReceiver = mpmc::RxFuture<Gui2Dev, mpmc::SharedSenderBRecvF>;
 
-fn btle_loop (
-    mut shutdown: oneshot::Receiver<()>,
-    tx: AsyncSender,
-    rx: AsyncReceiver,
-) -> Result<(), AppError> {
+fn btle_loop(shutdown: Arc<Semaphore>, tx: AsyncSender, rx: AsyncReceiver) -> Result<(), AppError> {
     use tokio::runtime::Builder;
     let rt = Builder::new_current_thread()
         .enable_io()
@@ -244,50 +240,51 @@ fn btle_loop (
         let mut peripherals: im::HashMap<PeripheralId, btle_plat::Peripheral> = im::HashMap::new();
         let mut disconnected: im::HashSet<PeripheralId> = im::HashSet::new();
         loop {
-            select! {
-                event = stream_map.next() => {
-                    let result = match &event {
-                        Some((StreamKey::BtleEvents, EventVariants::Event(event))) => {
-                            handle_btle_event(event, adapter, &mut peripherals, &mut disconnected, &mut stream_map, tx.clone()).await
-                        },
-                        Some((StreamKey::BtleNotifications(id), EventVariants::Notification(value))) => {
-                            handle_btle_notification(id, value, tx.clone()).await
-                        },
-                        Some((StreamKey::GuiState, EventVariants::GuiState(Gui2Dev::Changed(id,state)))) => {
-                            if let Some(peripheral) = peripherals.get(id) {
-                                handle_gui_event(peripheral, state).await
-                            } else {
-                                Err(AppError::MissingPeripheral(id.clone()))
-                            }
-                        },
-                        Some((_, _)) => unreachable!(),
-                        None => todo!(),
-                    };
-                    match result {
-                        Ok(id) => {
-                            if disconnected.contains(&id) || peripherals.contains_key(&id) {
-                                log::info!("{:?}", &event)
-                            };
-                        }
-                        Err(e) => {
-                            log::warn!("Error: {:#?}", e);
-                        }
-                    };
-                }
-                shutdown_msg = (&mut shutdown) => {
-                    return match shutdown_msg {
-                        Ok(()) => {
-                            let result = match tx.send(Dev2Gui::Shutdown).await {
-                                 Err(e) => Err(AppError::Shutdown(FatalError::MsgSend(e))),
-                                 Ok(()) => Ok(()),
-                            };
-                            result
-                        }
-                        Err(e) => {
-                            Err(AppError::Shutdown(FatalError::ShutdownRecv(e)))
+            if let Ok(()) = shutdown.try_acquire() {
+                return Ok(());
+            };
+
+            let event = stream_map.next().await;
+            {
+                let result = match &event {
+                    Some((StreamKey::BtleEvents, EventVariants::Event(event))) => {
+                        handle_btle_event(
+                            event,
+                            adapter,
+                            &mut peripherals,
+                            &mut disconnected,
+                            &mut stream_map,
+                            tx.clone(),
+                        )
+                        .await
+                    }
+                    Some((
+                        StreamKey::BtleNotifications(id),
+                        EventVariants::Notification(value),
+                    )) => handle_btle_notification(id, value, tx.clone()).await,
+                    Some((
+                        StreamKey::GuiState,
+                        EventVariants::GuiState(Gui2Dev::Changed(id, state)),
+                    )) => {
+                        if let Some(peripheral) = peripherals.get(id) {
+                            handle_gui_event(peripheral, state).await
+                        } else {
+                            Err(AppError::MissingPeripheral(id.clone()))
                         }
                     }
-                }
+                    Some((_, _)) => unreachable!(),
+                    None => todo!(),
+                };
+                match result {
+                    Ok(id) => {
+                        if disconnected.contains(&id) || peripherals.contains_key(&id) {
+                            log::info!("{:?}", &event)
+                        };
+                    }
+                    Err(e) => {
+                        log::warn!("Error: {:#?}", e);
+                    }
+                };
             }
         }
     })

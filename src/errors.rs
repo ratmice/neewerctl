@@ -1,6 +1,5 @@
 use crate::device;
 use crate::mpmc;
-use crate::oneshot;
 use crate::Dev2Gui;
 use std::{error, fmt, io};
 
@@ -19,7 +18,6 @@ pub enum AppError {
 
 #[derive(Debug)]
 pub enum FatalError {
-    ShutdownRecv(oneshot::error::RecvError),
     MsgSend(mpmc::SendError<Dev2Gui>),
     DataRecv(mpmc::TryRecvError),
 }
@@ -32,7 +30,6 @@ impl<'a> fmt::Display for FatalError {
             };
         }
         match self {
-            FatalError::ShutdownRecv(e) => dump!(e),
             FatalError::MsgSend(e) => dump!(e),
             FatalError::DataRecv(e) => dump!(e),
         }
@@ -42,7 +39,6 @@ impl<'a> fmt::Display for FatalError {
 impl<'a> error::Error for FatalError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            FatalError::ShutdownRecv(e) => e.source(),
             FatalError::MsgSend(e) => e.source(),
             FatalError::DataRecv(e) => e.source(),
         }
