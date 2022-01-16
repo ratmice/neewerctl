@@ -388,44 +388,60 @@ async fn handle_btle_event(
         }
         btleplug::api::CentralEvent::DeviceConnected(id) => {
             let peripheral = adapter.peripheral(id).await?;
-            peripheral
-                .discover_services()
+            let mut retry_count = 0;
+            let mut characteristics: Option<
+                std::collections::BTreeSet<btleplug::api::Characteristic>,
+            > = None;
+            while retry_count < 255 && characteristics.is_none() {
+                peripheral
+                    .discover_services()
+                    .await
+                    .expect("Discovering services");
+                let ctrstc = peripheral.characteristics();
+                let has_ctrstc =
+                    ctrstc.contains(&device::GATT) && ctrstc.contains(&device::DEV_CTL);
+                if has_ctrstc {
+                    characteristics = Some(ctrstc);
+                } else {
+                    retry_count += 1
+                }
+            }
+            log::info!("Retried finding characteristics: {} times", retry_count);
+            if let Some(_characteristics) = characteristics {
+                let notifs = peripheral.notifications().await?;
+                stream_map.insert(
+                    StreamKey::BtleNotifications(id.clone()),
+                    EventStreams::BtleNotifications(notifs),
+                );
+                peripheral.subscribe(&device::GATT).await?;
+                disconnected.remove(id);
+                peripherals.insert(id.clone(), peripheral.clone());
+                tx.send(Dev2Gui::DeviceEvent(DeviceEvent::Connected(
+                    id.clone(),
+                    Light::default(),
+                )))
                 .await
-                .expect("Discovering services");
-            let characteristics = peripheral.characteristics();
-            assert!(
-                characteristics.contains(&device::GATT)
-                    && characteristics.contains(&device::DEV_CTL)
-            );
-            let notifs = peripheral.notifications().await?;
-            stream_map.insert(
-                StreamKey::BtleNotifications(id.clone()),
-                EventStreams::BtleNotifications(notifs),
-            );
-            peripheral.subscribe(&device::GATT).await?;
-            disconnected.remove(id);
-            peripherals.insert(id.clone(), peripheral.clone());
-            tx.send(Dev2Gui::DeviceEvent(DeviceEvent::Connected(
-                id.clone(),
-                Light::default(),
-            )))
-            .await
-            .map_err(|e| AppError::Shutdown(FatalError::MsgSend(e)))?;
-            peripheral
-                .write(
-                    &device::DEV_CTL,
-                    &device::POWER_STATUS,
-                    WriteType::WithoutResponse,
-                )
-                .await?;
-            peripheral
-                .write(
-                    &device::DEV_CTL,
-                    &device::CHANNEL_STATUS,
-                    WriteType::WithoutResponse,
-                )
-                .await?;
-            Ok(id.clone())
+                .map_err(|e| AppError::Shutdown(FatalError::MsgSend(e)))?;
+                peripheral
+                    .write(
+                        &device::DEV_CTL,
+                        &device::POWER_STATUS,
+                        WriteType::WithoutResponse,
+                    )
+                    .await?;
+                peripheral
+                    .write(
+                        &device::DEV_CTL,
+                        &device::CHANNEL_STATUS,
+                        WriteType::WithoutResponse,
+                    )
+                    .await?;
+                Ok(id.clone())
+            } else {
+                peripheral.disconnect().await?;
+                // Not exactly the right error.
+                Err(AppError::MissingPeripheral(id.clone()))
+            }
         }
         btleplug::api::CentralEvent::DeviceDisconnected(id) => {
             disconnected.insert(id.clone());
