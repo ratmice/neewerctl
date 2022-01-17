@@ -66,7 +66,7 @@ fn idle_loop(
                         DeviceEvent::Connected(_, _) => {
                             gui_light.connected = true;
                         }
-                        DeviceEvent::Disconnected(_, _) => {
+                        DeviceEvent::Disconnected(_) => {
                             gui_light.connected = false;
                         }
                         DeviceEvent::Changed(_, dev_light) => {
@@ -82,8 +82,16 @@ fn idle_loop(
                 }
             }
 
-            for (dev_id, dev_event) in received {
-                gui_lights.insert(dev_id, dev_event.light());
+            for (_, dev_event) in received {
+                match dev_event {
+                    DeviceEvent::Connected(dev_id, dev_light)
+                    | DeviceEvent::Changed(dev_id, dev_light) => {
+                        gui_lights.insert(dev_id, dev_light);
+                    }
+                    event => {
+                        log::warn!("Received event: {:?} for unknown device.", event);
+                    }
+                }
             }
         });
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -192,7 +200,7 @@ fn start_threads(
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
     Connected(PeripheralId, Light),
-    Disconnected(PeripheralId, Light),
+    Disconnected(PeripheralId),
     Changed(PeripheralId, Light),
 }
 pub enum Dev2Gui {
@@ -201,12 +209,7 @@ pub enum Dev2Gui {
 impl DeviceEvent {
     fn id(&self) -> PeripheralId {
         match self {
-            Self::Connected(id, _) | Self::Disconnected(id, _) | Self::Changed(id, _) => id.clone(),
-        }
-    }
-    fn light(&self) -> Light {
-        match self {
-            Self::Connected(_, l) | Self::Disconnected(_, l) | Self::Changed(_, l) => l.clone(),
+            Self::Connected(id, _) | Self::Disconnected(id) | Self::Changed(id, _) => id.clone(),
         }
     }
 }
@@ -416,9 +419,13 @@ async fn handle_btle_event(
                 peripheral.subscribe(&device::GATT).await?;
                 disconnected.remove(id);
                 peripherals.insert(id.clone(), peripheral.clone());
+                let light = Light {
+                    connected: true,
+                    ..Light::default()
+                };
                 tx.send(Dev2Gui::DeviceEvent(DeviceEvent::Connected(
                     id.clone(),
-                    Light::default(),
+                    light,
                 )))
                 .await
                 .map_err(|e| AppError::Shutdown(FatalError::MsgSend(e)))?;
@@ -447,6 +454,9 @@ async fn handle_btle_event(
             disconnected.insert(id.clone());
             peripherals.remove(id);
             stream_map.remove(&StreamKey::BtleNotifications(id.clone()));
+            tx.send(Dev2Gui::DeviceEvent(DeviceEvent::Disconnected(id.clone())))
+                .await
+                .map_err(|e| AppError::Shutdown(FatalError::MsgSend(e)))?;
             Ok(id.clone())
         }
         btleplug::api::CentralEvent::ManufacturerDataAdvertisement { id, .. } => Ok(id.clone()),

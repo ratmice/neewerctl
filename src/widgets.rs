@@ -150,11 +150,11 @@ pub fn device_widget() -> impl Widget<Light> {
     let mut col = Flex::column().main_axis_alignment(MainAxisAlignment::Start);
     let mut row_top = Flex::row().main_axis_alignment(MainAxisAlignment::Start);
 
-    let switch = LensWrap::new(Switch::new(), Light::power).on_click(
-        move |_ctxt, data: &mut Light, _env| {
+    let switch = LensWrap::new(Switch::new(), Light::power)
+        .on_click(move |_ctxt, data: &mut Light, _env| {
             data.toggle_power();
-        },
-    );
+        })
+        .disabled_if(|data: &Light, _| !data.connected);
 
     let switch_label = Label::new("Power:");
     row_top.add_child(Padding::new(5.0, switch_label));
@@ -186,7 +186,8 @@ pub fn device_widget() -> impl Widget<Light> {
     )
     .controller(OnChange::new(move |_, _: &Light, data, _| {
         data._changes_ |= Changed::Mode as u8;
-    }));
+    }))
+    .disabled_if(|data: &Light, _| !data.connected);
 
     let b = MultiRadio::new(
         "HSI",
@@ -211,9 +212,9 @@ pub fn device_widget() -> impl Widget<Light> {
     )
     .controller(OnChange::new(move |_, _: &Light, data, _| {
         data._changes_ |= Changed::Mode as u8;
-    }));
+    }))
+    .disabled_if(|data: &Light, _| !data.connected);
 
-    //let channel = tx_gui.clone();
     let c = MultiRadio::new(
         "Anim",
         scene_widget(),
@@ -236,7 +237,8 @@ pub fn device_widget() -> impl Widget<Light> {
     )
     .controller(OnChange::new(move |_, _: &Light, data, _| {
         data._changes_ |= Changed::Mode as u8;
-    }));
+    }))
+    .disabled_if(|data: &Light, _| !data.connected);
 
     col.add_child(a);
     col.add_child(b);
