@@ -187,7 +187,7 @@ pub fn device_widget() -> impl Widget<Light> {
     .controller(OnChange::new(move |_, _: &Light, data, _| {
         data._changes_ |= Changed::Mode as u8;
     }))
-    .disabled_if(|data: &Light, _| !data.connected);
+    .disabled_if(|data: &Light, _| !data.connected || !data.power);
 
     let b = MultiRadio::new(
         "HSI",
@@ -213,7 +213,7 @@ pub fn device_widget() -> impl Widget<Light> {
     .controller(OnChange::new(move |_, _: &Light, data, _| {
         data._changes_ |= Changed::Mode as u8;
     }))
-    .disabled_if(|data: &Light, _| !data.connected);
+    .disabled_if(|data: &Light, _| !data.connected || !data.power);
 
     let c = MultiRadio::new(
         "Anim",
@@ -238,7 +238,7 @@ pub fn device_widget() -> impl Widget<Light> {
     .controller(OnChange::new(move |_, _: &Light, data, _| {
         data._changes_ |= Changed::Mode as u8;
     }))
-    .disabled_if(|data: &Light, _| !data.connected);
+    .disabled_if(|data: &Light, _| !data.connected || !data.power);
 
     col.add_child(a);
     col.add_child(b);
