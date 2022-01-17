@@ -4,9 +4,7 @@ use btleplug::api::{
 };
 use btleplug::platform as btle_plat;
 use crossfire::mpmc;
-use druid::{
-    commands, AppLauncher, Env, LocalizedString, Menu, MenuItem, SysMods, WindowDesc, WindowId,
-};
+use druid::{Env, LocalizedString, Menu, MenuItem};
 use im::hashmap::Entry as ImEntry;
 use imbl as im;
 use std::{convert::TryFrom, panic, sync::Arc};
@@ -98,7 +96,8 @@ fn idle_loop(
     }
 }
 
-fn main_menu(_id: Option<WindowId>, _data: &AppState, _env: &Env) -> Menu<AppState> {
+fn main_menu(_id: Option<druid::WindowId>, _data: &AppState, _env: &Env) -> Menu<AppState> {
+    use druid::commands;
     Menu::empty().entry(
         Menu::new(LocalizedString::new("common-menu-file-menu"))
             .entry(
@@ -108,7 +107,7 @@ fn main_menu(_id: Option<WindowId>, _data: &AppState, _env: &Env) -> Menu<AppSta
             .entry(
                 MenuItem::new(LocalizedString::new("Quit"))
                     .command(commands::QUIT_APP)
-                    .hotkey(SysMods::Cmd, "q"),
+                    .hotkey(druid::SysMods::Cmd, "q"),
             ),
     )
 }
@@ -121,11 +120,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let window = WindowDesc::new(devices_widget())
+    let window = druid::WindowDesc::new(devices_widget())
         .title(LocalizedString::new("neewerctl").with_placeholder("neewerctl"))
         .menu(main_menu);
     let launcher =
-        AppLauncher::with_window(window).configure_env(druid_widget_nursery::configure_env);
+        druid::AppLauncher::with_window(window).configure_env(druid_widget_nursery::configure_env);
 
     let shutdown = Arc::new(Semaphore::new(2));
     let ((), ()) = (shutdown.acquire(), shutdown.acquire());
