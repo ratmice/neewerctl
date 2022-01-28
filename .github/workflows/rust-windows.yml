@@ -1,4 +1,4 @@
-name: Rust ubuntu
+name: Rust windows
 
 on:
   push:
@@ -12,12 +12,10 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@v2
-    - name: Prep
-      run: sudo apt-get update && sudo apt install libdbus-1-dev pkg-config libpango1.0-dev libatk1.0-dev libgtk-3-dev libgtk-3-dev
     - name: Build
       run: cargo build --verbose
     - name: Run tests
