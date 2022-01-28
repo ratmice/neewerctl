@@ -241,10 +241,10 @@ mod tests {
         rx.recv().unwrap(); // wait for child to be done
     }
 
-    fn fight(semaphore: Arc<Semaphore>) -> thread::JoinHandle<(i32, i32)> {
+    fn fight(semaphore: Arc<Semaphore>, max: usize) -> thread::JoinHandle<(i32, usize)> {
         thread::spawn(move || {
             let mut acquire_count = 0;
-            let mut fail_acquire_count = 0;
+            let mut fail_acquire_count : usize = 0;
             let mut have_semaphore;
             loop {
                 have_semaphore = semaphore.try_acquire();
@@ -252,10 +252,10 @@ mod tests {
                     std::thread::yield_now();
                     semaphore.release();
                     acquire_count += 1;
-                    if acquire_count == 1000 || fail_acquire_count > 600000 {
+                    if acquire_count == 1000 || fail_acquire_count >= max {
                         return (acquire_count, fail_acquire_count);
                     }
-                } else if fail_acquire_count < 600000 {
+                } else if fail_acquire_count < max - 1 {
                     fail_acquire_count += 1;
                 } else {
                     return (acquire_count, fail_acquire_count);
@@ -267,9 +267,9 @@ mod tests {
     #[test]
     fn test_sem_try_acquire() {
         let s = Arc::new(Semaphore::new(2));
-        let hndl1 = fight(s.clone());
-        let hndl2 = fight(s.clone());
-        let hndl3 = fight(s);
+        let hndl1 = fight(s.clone(), std::usize::MAX);
+        let hndl2 = fight(s.clone(), std::usize::MAX);
+        let hndl3 = fight(s, std::usize::MAX);
         let a = hndl1.join().unwrap();
         let b = hndl2.join().unwrap();
         let c = hndl3.join().unwrap();
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn test_sem_try_acquire_zero() {
         let s = Arc::new(Semaphore::new(0));
-        let hndl5 = fight(s);
+        let hndl5 = fight(s, 10);
         let be_zero = hndl5.join().unwrap();
 
         assert_eq!(be_zero.0, 0);
