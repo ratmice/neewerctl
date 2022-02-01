@@ -185,7 +185,7 @@ pub fn device_widget() -> impl Widget<Light> {
         ),
     )
     .controller(OnChange::new(move |_, _: &Light, data, _| {
-        data._changes_ |= Changed::Mode as u8;
+        data._changes_ |= Changed::Mode;
     }))
     .disabled_if(|data: &Light, _| !data.connected || !data.power);
 
@@ -211,7 +211,7 @@ pub fn device_widget() -> impl Widget<Light> {
         ),
     )
     .controller(OnChange::new(move |_, _: &Light, data, _| {
-        data._changes_ |= Changed::Mode as u8;
+        data._changes_ |= Changed::Mode;
     }))
     .disabled_if(|data: &Light, _| !data.connected || !data.power);
 
@@ -236,7 +236,7 @@ pub fn device_widget() -> impl Widget<Light> {
         ),
     )
     .controller(OnChange::new(move |_, _: &Light, data, _| {
-        data._changes_ |= Changed::Mode as u8;
+        data._changes_ |= Changed::Mode;
     }))
     .disabled_if(|data: &Light, _| !data.connected || !data.power);
 

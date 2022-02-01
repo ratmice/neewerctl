@@ -244,7 +244,7 @@ mod tests {
     fn fight(semaphore: Arc<Semaphore>, max: usize) -> thread::JoinHandle<(i32, usize)> {
         thread::spawn(move || {
             let mut acquire_count = 0;
-            let mut fail_acquire_count : usize = 0;
+            let mut fail_acquire_count: usize = 0;
             let mut have_semaphore;
             loop {
                 have_semaphore = semaphore.try_acquire();
