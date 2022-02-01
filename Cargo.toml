@@ -10,8 +10,7 @@ druid = {git = "https://github.com/linebender/druid", rev = "2f5beb8faba648c170a
 druid-widget-nursery = {git="https://github.com/linebender/druid-widget-nursery.git", rev="e0b8dc54c4ef171dc7c905253a26cf881266a045", features=["derive"]}
 strum_macros = {version = "0.23.0", git="https://github.com/ratmice/strum.git", branch="enum_metadata"}
 strum = {version = "0.23.0", git="https://github.com/ratmice/strum.git", branch="enum_metadata"}
-enum_extra = {git="https://github.com/ratmice/enum_extra.git"}
-enum_extra_derive = {git="https://github.com/ratmice/enum_extra.git"}
+enum_extra = {git="https://github.com/ratmice/enum_extra.git", features=["derive"]}
 btleplug = {version = "0.9.1"}
 crossfire = "0.1.7"
 tokio = {version = "1.15.0", features = ["macros"]}

@@ -2,7 +2,6 @@ use btleplug::platform::PeripheralId;
 use druid::{Data, Lens};
 use druid_widget_nursery::prism::Prism;
 use enum_extra::{Mask, NonZeroRepr, OpaqueRepr};
-use enum_extra_derive::NonZeroRepr;
 use std::cmp::{Eq, PartialEq};
 use std::collections::BTreeMap;
 use std::iter::Iterator;
