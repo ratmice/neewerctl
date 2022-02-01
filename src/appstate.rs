@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::iter::Iterator;
 use std::sync::Arc;
 use strum::EnumMetadata;
-use strum_macros::EnumMetadata;
 
 /// AppState...
 #[derive(Clone, Data, Debug, Lens)]
